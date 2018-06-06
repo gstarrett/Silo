@@ -9,7 +9,7 @@ use Bio::Perl;
 #my $spades = "/Users/starrettgj/soft/SPAdes-3.11.1-Darwin/bin/spades.py";
 my $spades = "spades.py";
 my $bowtie = "bowtie2";
-my $fastqDump = "/Users/starrettgj/soft/sratoolkit.2.9.0-mac64/bin/fastq-dump.2.9.0";
+my $fastqDump = "fastq-dump";
 my $usage = "perl mill.pl [options] <FASTQ/SRAacc>
 
 --filteredFasta/-f  Fasta of filtered reads for assembly

@@ -38,6 +38,7 @@ my $pident = 100;
 my $seedLen = 20;
 my $lenNucmer = 50;
 my $k = 2;
+my $mp = "8,4";
 
 GetOptions (  "contigs:s" => \$contigs,
               "filtered:s" => \$filtered,
@@ -93,7 +94,7 @@ for (my $i=0; $i<$iter; $i++) {
   if ($i == 0) {
     if ($rawReads =~ /fastq|fq$/) {
       print "\tFASTQ input, aligning to reference\n";
-      @SAM = `$bowtie --local --very-sensitive-local -k $k -D $seedLen --mp 8,4 -p $threads -x $assemblyDir/bowtie2_index -U $rawReads --no-hd`;
+      @SAM = `$bowtie --local --very-sensitive-local -k $k -D $seedLen --mp $mp -p $threads -x $assemblyDir/bowtie2_index -U $rawReads --no-hd`;
     } elsif ($rawReads =~ /^[DES]RR/) {
       my ($mSpot,$xSpot) = ("","");
       if (defined $x) {
@@ -103,7 +104,7 @@ for (my $i=0; $i<$iter; $i++) {
         $mSpot = " -N $m";
       }
       print "\tSRA input, streaming reads via fastq-dump and aligning to reference\n";
-      @SAM = `$fastqDump --skip-technical -Z$mSpot$xSpot $rawReads | $bowtie --local --very-sensitive-local -k $k -D $seedLen --mp 7,3 -p $threads -x $assemblyDir/bowtie2_index -U - --no-hd`;
+      @SAM = `$fastqDump --skip-technical -Z$mSpot$xSpot $rawReads | $bowtie --local --very-sensitive-local -k $k -D $seedLen --mp $mp -p $threads -x $assemblyDir/bowtie2_index -U - --no-hd`;
     } else {
       die "Invalid input! $rawReads\n";
     }
@@ -111,7 +112,7 @@ for (my $i=0; $i<$iter; $i++) {
     #print $unaln;
     #my $stdin = \@unaln;
     print "\tAligning previously unaligned reads to extended contigs\n";
-    my $cmd = "$bowtie --local --very-sensitive-local -k $k -D $seedLen --mp 7,3 -p $threads -x $assemblyDir/bowtie2_index -U - --no-hd";
+    my $cmd = "$bowtie --local --very-sensitive-local -k $k -D $seedLen --mp $mp -p $threads -x $assemblyDir/bowtie2_index -U - --no-hd";
     # @SAM = `echo "$unaln" | $bowtie -k $k --local -D $seedLen --mp 7,3 -p $threads -x $assemblyDir/bowtie2_index -U - --no-hd`;
     run3 $cmd, \$unaln, \@SAM ;
     #print Dumper(@SAM);
@@ -129,7 +130,7 @@ for (my $i=0; $i<$iter; $i++) {
     next unless(defined $f[2]);
     if ($f[2] eq "*") {
       $unaln .= join("\n","\@$f[0]","$f[9]","+","$f[10]") . "\n";
-    } elsif ($f[4] > 30) {
+    } elsif ($f[4] >= 30) {
       my @cigarArray;
       while ($f[5] =~ /(\d+)(\w)/g) {
         my %hash = ($2 => $1);
@@ -138,13 +139,10 @@ for (my $i=0; $i<$iter; $i++) {
       }
       my @first = keys %{$cigarArray[0]};
       my @last = keys %{$cigarArray[$#cigarArray]};
-      my ($fLen, $lLen) = 0,0;
-      $fLen = $cigarArray[0]{$first[0]} if exists $cigarArray[0]{$first[0]};
-      $lLen =  $cigarArray[$#cigarArray]{$last[0]} if exists $cigarArray[$#cigarArray]{$last[0]};
-      if (($first[0] eq "S" && $last[0] ne "S") || ($first[0] eq "S" && $last[0] eq "S" && $fLen > $lLen)) {
-        my $len = $fLen;
+      my $readLen = length($f[9]);
+      if (($first[0] eq "S" && $last[0] ne "S") || ($first[0] eq "S" && $last[0] eq "S" && abs(${$refHash{$f[2]}}[2]-$f[3]) > $f[3])) {
+        my $len = $cigarArray[0]{$first[0]} if exists $cigarArray[0]{$first[0]};
         my $newStart = $f[3] - $len;
-        my $readLen = length($f[9]);
         my $refMatch = substr(${$refHash{$f[2]}}[0],$f[3],$readLen-$len-1);
         my $readMatch = substr($f[9],-($readLen-$len-1));
         #print "S $refMatch\nS $readMatch\n";
@@ -153,10 +151,9 @@ for (my $i=0; $i<$iter; $i++) {
           ${$refHash{$f[2]}}[1] = $newStart;
           ${$refHash{$f[2]}}[3] = substr($f[9],1,$len-1);
         }
-      } elsif (($first[0] ne "S" && $last[0] eq "S") || ($first[0] eq "S" && $last[0] eq "S" && $fLen < $lLen)) {
-        my $len = $lLen;
+      } elsif (($first[0] ne "S" && $last[0] eq "S") || ($first[0] eq "S" && $last[0] eq "S" && abs(${$refHash{$f[2]}}[2]-$f[3]) < $f[3])) {
+        my $len = $cigarArray[$#cigarArray]{$last[0]} if exists $cigarArray[$#cigarArray]{$last[0]};
         my $newEnd = $f[3] + $len;
-        my $readLen = length($f[9]);
         my $refMatch = substr(${$refHash{$f[2]}}[0],$f[3],$readLen-$len-1);
         my $readMatch = substr($f[9],1,$readLen-$len-1);
         #print "$refMatch S\n$readMatch S\n";

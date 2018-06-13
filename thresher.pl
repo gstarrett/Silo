@@ -11,17 +11,18 @@ if ($mon < 10) {
 }
 my $date = "$year$mon$mday";
 my $method = shift;
+my $limit = shift;
 my $inFile = shift;
 my $database = shift;
 my $bowtie = "bowtie2";
-my $diamond = "/data/starrettgj/diamond-0.9.17/bin/diamond";
+my $diamond = "/data/\$USER/diamond-0.9.17/bin/diamond";
 my $count = 0;
 my $fileNum = 0;
 my @cmd;
 open(IN, "< $inFile");
 while(my $line = <IN>) {
   chomp($line);
-  if ($count < 1000) {
+  if ($count < $limit) {
     my $output = "$line.thresher.txt";
     if ($method eq "np") {
       push(@cmd, "fastq-dump -Z $line | $diamond blastx --threads \$SLURM_CPUS_PER_TASK -d $database -o $output -l 1 -k 1 --evalue 0.001 --outfmt 6 qseqid sseqid stitle pident qlen length mismatch evalue bitscore qseq sseq");

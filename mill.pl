@@ -9,7 +9,7 @@ use Bio::Perl;
 #my $spades = "/Users/starrettgj/soft/SPAdes-3.11.1-Darwin/bin/spades.py";
 my $spades = "spades.py";
 my $bowtie = "bowtie2";
-my $fastqDump = "fastq-dump";
+my $fastqDump = "/Users/starrettgj/soft/sratoolkit.2.9.0-mac64/bin/fastq-dump.2.9.0";
 my $usage = "perl mill.pl [options] <FASTQ/SRAacc>
 
 --filteredFasta/-f  Fasta of filtered reads for assembly
@@ -17,7 +17,7 @@ my $usage = "perl mill.pl [options] <FASTQ/SRAacc>
 --threads/-t        number of threads for processing (1)
 --iterations/-i     max number of extension iterations (25)
 --pident/-p         min percent identity for nucmer matches (100)
---seedLen/-s        seed length for bowtie2 alignment (20)
+--seedLen/-s        seed length for alignment (36)
 --numMatch          number of alignments returned for a read by bowtie2 (2)
 --help/-h           this handy help screen
 --xSpots/-x         maximum spot id/aka number of reads/pairs
@@ -35,10 +35,15 @@ my $assemblyDir = ".";
 my $threads = 1;
 my $iter = 25;
 my $pident = 100;
-my $seedLen = 20;
+my $seedLen = 36;
 my $lenNucmer = 50;
 my $k = 2;
-my $mp = "8,4";
+my $adapter = "AGATCGGAAGAGC";
+my $revAdapter = revcom($adapter)->seq();
+my $kmerSize = $seedLen;
+my $endSize = $kmerSize;
+
+#my %readNames;
 
 GetOptions (  "contigs:s" => \$contigs,
               "filtered:s" => \$filtered,
@@ -69,32 +74,34 @@ if (defined $filtered) {
 } else {
   die("no reference defined\n$usage\n");
 }
-my $unaln;
+my @unaln;
+my @fastq;
 for (my $i=0; $i<$iter; $i++) {
   print "=== Starting iteration $i ===\n";
+  my %refKhash;
   my %refHash;
-  open(my $refFH, "< $ref");
-  my $refFasta = "";
-  $refFasta = Bio::SeqIO->new(-fh => $refFH, -format => "fasta");
+  my $refFasta = Bio::SeqIO->new(-file => $ref, -format => "fasta");
   while (my $seqObj = $refFasta->next_seq) {
     my $seq = $seqObj->seq();
     my $name = $seqObj->display_id();
-    my @array = ($seq,1,length($seq),"","");
-    # print length($seq), "\n";
-    $refHash{$name} = \@array;
+    my $start = substr($seq,0,$endSize);
+    my $end = substr($seq,-$endSize);
+    next if $start eq $end;
+    $refKhash{$start} = [$name, 0];
+    $refKhash{$end} = [$name, length($seq)-1];
+    $refHash{$name} = [$seq,0,length($seq)-1,"",""];
+    #print "$start\t$end\n";
   }
-  close($refFH);
   ### START loop for n iterations
   # map reads to contig ends (for first round map to full contigs and remove reads that map >100bp from ends)
   # unmapped reads get stored for repeat use
-  print "\tBuilding reference index against $ref\n";
-  print LOG `$bowtie-build $ref $assemblyDir/bowtie2_index`;
-  my @SAM;
-  #print $rawReads;
+
   if ($i == 0) {
     if ($rawReads =~ /fastq|fq$/) {
       print "\tFASTQ input, aligning to reference\n";
-      @SAM = `$bowtie --local --very-sensitive-local -k $k -D $seedLen --mp $mp -p $threads -x $assemblyDir/bowtie2_index -U $rawReads --no-hd`;
+      open(FQ, "< $rawReads");
+      @fastq = <FQ>;
+      close(FQ);
     } elsif ($rawReads =~ /^[DES]RR/) {
       my ($mSpot,$xSpot) = ("","");
       if (defined $x) {
@@ -104,70 +111,73 @@ for (my $i=0; $i<$iter; $i++) {
         $mSpot = " -N $m";
       }
       print "\tSRA input, streaming reads via fastq-dump and aligning to reference\n";
-      @SAM = `$fastqDump --skip-technical -Z$mSpot$xSpot $rawReads | $bowtie --local --very-sensitive-local -k $k -D $seedLen --mp $mp -p $threads -x $assemblyDir/bowtie2_index -U - --no-hd`;
+      @fastq = `$fastqDump --fasta 0 -I --skip-technical -Z$mSpot$xSpot $rawReads`;
     } else {
       die "Invalid input! $rawReads\n";
     }
-  } else {
-    #print $unaln;
-    #my $stdin = \@unaln;
-    print "\tAligning previously unaligned reads to extended contigs\n";
-    my $cmd = "$bowtie --local --very-sensitive-local -k $k -D $seedLen --mp $mp -p $threads -x $assemblyDir/bowtie2_index -U - --no-hd";
-    # @SAM = `echo "$unaln" | $bowtie -k $k --local -D $seedLen --mp 7,3 -p $threads -x $assemblyDir/bowtie2_index -U - --no-hd`;
-    run3 $cmd, \$unaln, \@SAM ;
-    #print Dumper(@SAM);
-  }
-  # extend contigs by finding read with most distant end from contig end
-  #open(SAM, "< aligned.sam");
 
-  $unaln="";
-  print "\tProcessing SAM output for matches to extend contings and capturing unaligned reads\n";
-  while (@SAM) {
-    my $line = shift @SAM;
-    chomp($line);
-    #print $line, "\n";
-    my @f = split("\t", $line);
-    next unless(defined $f[2]);
-    if ($f[2] eq "*") {
-      $unaln .= join("\n","\@$f[0]","$f[9]","+","$f[10]") . "\n";
-    } elsif ($f[4] >= 30) {
-      my @cigarArray;
-      while ($f[5] =~ /(\d+)(\w)/g) {
-        my %hash = ($2 => $1);
-        push(@cigarArray, \%hash);
-        #print join("\t",$f[0],$f[2],$2,$1),"\n";
-      }
-      my @first = keys %{$cigarArray[0]};
-      my @last = keys %{$cigarArray[$#cigarArray]};
-      my $readLen = length($f[9]);
-      if (($first[0] eq "S" && $last[0] ne "S") || ($first[0] eq "S" && $last[0] eq "S" && abs(${$refHash{$f[2]}}[2]-$f[3]) > $f[3])) {
-        my $len = $cigarArray[0]{$first[0]} if exists $cigarArray[0]{$first[0]};
-        my $newStart = $f[3] - $len;
-        my $refMatch = substr(${$refHash{$f[2]}}[0],$f[3],$readLen-$len-1);
-        my $readMatch = substr($f[9],-($readLen-$len-1));
-        #print "S $refMatch\nS $readMatch\n";
-        next if $refMatch ne $readMatch;
-        if (${$refHash{$f[2]}}[1] > $newStart) {
-          ${$refHash{$f[2]}}[1] = $newStart;
-          ${$refHash{$f[2]}}[3] = substr($f[9],1,$len-1);
-        }
-      } elsif (($first[0] ne "S" && $last[0] eq "S") || ($first[0] eq "S" && $last[0] eq "S" && abs(${$refHash{$f[2]}}[2]-$f[3]) < $f[3])) {
-        my $len = $cigarArray[$#cigarArray]{$last[0]} if exists $cigarArray[$#cigarArray]{$last[0]};
-        my $newEnd = $f[3] + $len;
-        my $refMatch = substr(${$refHash{$f[2]}}[0],$f[3],$readLen-$len-1);
-        my $readMatch = substr($f[9],1,$readLen-$len-1);
-        #print "$refMatch S\n$readMatch S\n";
-        next if $refMatch ne $readMatch;
-        if (${$refHash{$f[2]}}[2] < $newEnd) {
-          ${$refHash{$f[2]}}[2] = $newEnd;
-          ${$refHash{$f[2]}}[4] = substr($f[9],-$len);
+  }
+  exit if scalar @fastq == 0;
+  print "Read in ", (scalar @fastq)/2 , " reads\n";
+  while (my $name = shift @fastq) {
+    my $seq = shift @fastq;
+    if ($i == 0 && $rawReads =~ /fastq|fq$/) {
+      my $plus = shift @fastq;
+      my $qual = shift @fastq;
+    }
+    chomp($name,$seq);
+    my $matchBool = 0;
+    for my $kmer (keys %refKhash) {
+      my $pos = index($seq, $kmer);
+      if ($pos >= 0) {
+        $matchBool = 1;
+        my $refName = ${$refKhash{$kmer}}[0];
+        if (${$refKhash{$kmer}}[1] <= 0) {
+          my $newStartSeq = substr($seq,0,$pos);
+          my $newStart = 0 - length($newStartSeq);
+          if ($newStart < ${$refHash{$refName}}[1]) {
+            ${$refHash{$refName}}[1] = $newStart;
+            ${$refHash{$refName}}[3] = $newStartSeq;
+          }
+        } elsif (${$refKhash{$kmer}}[1] > 0) {
+          my $newEndSeq = substr($seq,$pos+$kmerSize);
+          my $newEnd = length(${$refHash{$refName}}[0]) + length($newEndSeq);
+          if ($newEnd > ${$refHash{$refName}}[2]) {
+            ${$refHash{$refName}}[2] = $newEnd;
+            ${$refHash{$refName}}[4] = $newEndSeq;
+          }
         }
       } else {
-        next;
+        my $revSeq = revcom($seq)->seq();
+        $pos = index($revSeq, $kmer);
+        if ($pos >= 0) {
+          $matchBool = 1;
+          my $refName = ${$refKhash{$kmer}}[0];
+          if (${$refKhash{$kmer}}[1] <= 0) {
+            my $newStartSeq = substr($revSeq,0,$pos);
+            my $newStart = 0 - length($newStartSeq);
+            if ($newStart < ${$refHash{$refName}}[1]) {
+              ${$refHash{$refName}}[1] = $newStart;
+              ${$refHash{$refName}}[3] = $newStartSeq;
+            }
+          } elsif (${$refKhash{$kmer}}[1] > 0) {
+            my $newEndSeq = substr($revSeq,$pos+$kmerSize);
+            my $adapterPos = index($newEndSeq);
+            my $newEnd = length(${$refHash{$refName}}[0]) + length($newEndSeq);
+            if ($newEnd > ${$refHash{$refName}}[2]) {
+              ${$refHash{$refName}}[2] = $newEnd;
+              ${$refHash{$refName}}[4] = $newEndSeq;
+            }
+          }
+        }
       }
     }
+    if ($matchBool == 0) {
+      push(@unaln, ($name, $seq));
+    }
   }
-
+  @fastq = @unaln;
+  @unaln = ();
   print "\tWriting out extended contigs\n";
   open(OUT, "> $prefix.extended.$i.fasta");
   my %extHash;

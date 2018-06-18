@@ -9,7 +9,7 @@ use Bio::Perl;
 #my $spades = "/Users/starrettgj/soft/SPAdes-3.11.1-Darwin/bin/spades.py";
 my $spades = "spades.py";
 my $bowtie = "bowtie2";
-my $fastqDump = "/Users/starrettgj/soft/sratoolkit.2.9.0-mac64/bin/fastq-dump.2.9.0";
+my $fastqDump = "fastq-dump";
 my $usage = "perl mill.pl [options] <FASTQ/SRAacc>
 
 --filteredFasta/-f  Fasta of filtered reads for assembly
@@ -155,6 +155,11 @@ for (my $i=0; $i<$iter; $i++) {
           my $refName = ${$refKhash{$kmer}}[0];
           if (${$refKhash{$kmer}}[1] <= 0) {
             my $newStartSeq = substr($revSeq,0,$pos);
+            my $adapterPos = index($newEndSeq,$revAdapter);
+            if ($adapterPos >= 0) {
+              my $trimmed = substr($newStartSeq,$adapterPos+length($revAdapter));
+              $newStartSeq = $trimmed;
+            }
             my $newStart = 0 - length($newStartSeq);
             if ($newStart < ${$refHash{$refName}}[1]) {
               ${$refHash{$refName}}[1] = $newStart;
@@ -162,7 +167,11 @@ for (my $i=0; $i<$iter; $i++) {
             }
           } elsif (${$refKhash{$kmer}}[1] > 0) {
             my $newEndSeq = substr($revSeq,$pos+$kmerSize);
-            # my $adapterPos = index($newEndSeq,);
+            my $adapterPos = index($newEndSeq,$adapter);
+            if ($adapterPos >= 0) {
+              my $trimmed = substr($newEndSeq,0,$adapterPos);
+              $newEndSeq = $trimmed;
+            }
             my $newEnd = length(${$refHash{$refName}}[0]) + length($newEndSeq);
             if ($newEnd > ${$refHash{$refName}}[2]) {
               ${$refHash{$refName}}[2] = $newEnd;

@@ -162,7 +162,7 @@ for (my $i=0; $i<$iter; $i++) {
             }
           } elsif (${$refKhash{$kmer}}[1] > 0) {
             my $newEndSeq = substr($revSeq,$pos+$kmerSize);
-            my $adapterPos = index($newEndSeq);
+            # my $adapterPos = index($newEndSeq,);
             my $newEnd = length(${$refHash{$refName}}[0]) + length($newEndSeq);
             if ($newEnd > ${$refHash{$refName}}[2]) {
               ${$refHash{$refName}}[2] = $newEnd;

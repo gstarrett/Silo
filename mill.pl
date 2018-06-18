@@ -134,6 +134,11 @@ for (my $i=0; $i<$iter; $i++) {
         my $refName = ${$refKhash{$kmer}}[0];
         if (${$refKhash{$kmer}}[1] <= 0) {
           my $newStartSeq = substr($seq,0,$pos);
+          my $adapterPos = index($newStartSeq,$revAdapter);
+          if ($adapterPos >= 0) {
+            my $trimmed = substr($newStartSeq,$adapterPos+length($revAdapter));
+            $newStartSeq = $trimmed;
+          }
           my $newStart = 0 - length($newStartSeq);
           if ($newStart < ${$refHash{$refName}}[1]) {
             ${$refHash{$refName}}[1] = $newStart;
@@ -141,6 +146,10 @@ for (my $i=0; $i<$iter; $i++) {
           }
         } elsif (${$refKhash{$kmer}}[1] > 0) {
           my $newEndSeq = substr($seq,$pos+$kmerSize);
+          if ($adapterPos >= 0) {
+            my $trimmed = substr($newStartSeq,$adapterPos+length($revAdapter));
+            $newStartSeq = $trimmed;
+          }
           my $newEnd = length(${$refHash{$refName}}[0]) + length($newEndSeq);
           if ($newEnd > ${$refHash{$refName}}[2]) {
             ${$refHash{$refName}}[2] = $newEnd;

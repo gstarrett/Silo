@@ -5,10 +5,10 @@ use Data::Dumper;
 use Getopt::Long;
 use IPC::Run3 qw( run3 );
 use Bio::Perl;
+use Parallel::ForkManager;
 
 #my $spades = "/Users/starrettgj/soft/SPAdes-3.11.1-Darwin/bin/spades.py";
 my $spades = "spades.py";
-my $bowtie = "bowtie2";
 my $fastqDump = "fastq-dump";
 my $usage = "perl mill.pl [options] <FASTQ/SRAacc>
 
@@ -17,8 +17,8 @@ my $usage = "perl mill.pl [options] <FASTQ/SRAacc>
 --threads/-t        number of threads for processing (1)
 --iterations/-i     max number of extension iterations (25)
 --pident/-p         min percent identity for nucmer matches (100)
---seedLen/-s        seed length for alignment (36)
---numMatch          number of alignments returned for a read by bowtie2 (2)
+--seedLen/-s        kmer length for alignment (36)
+--depth/-d          minimum number of reads to support extension (3)
 --help/-h           this handy help screen
 --xSpots/-x         maximum spot id/aka number of reads/pairs
 --mSpots/-m         minimum spot id, use with x for range
@@ -37,6 +37,7 @@ my $iter = 25;
 my $pident = 100;
 my $seedLen = 36;
 my $lenNucmer = 50;
+my $cov = 3;
 my $k = 2;
 my $adapter = "AGATCGGAAGAGC";
 my $revAdapter = revcom($adapter)->seq();
@@ -51,8 +52,8 @@ GetOptions (  "contigs:s" => \$contigs,
               "iterations:i" => \$iter,
               "pident:f" => \$pident,
               "seedLen:i" => \$seedLen,
-              "numMatch:i" => \$k,
               "xSpots:i" => \$x,
+              "depth:i" => \$cov,
               "mSpots:i" => \$m,
               "readMax:i" => \$readMax,
               "out:s" => \$prefix,
@@ -74,7 +75,7 @@ if (defined $filtered) {
 } else {
   die("no reference defined\n$usage\n");
 }
-my @unaln;
+
 my @fastq;
 for (my $i=0; $i<$iter; $i++) {
   print "=== Starting iteration $i ===\n";
@@ -89,7 +90,7 @@ for (my $i=0; $i<$iter; $i++) {
     next if $start eq $end;
     $refKhash{$start} = [$name, 0];
     $refKhash{$end} = [$name, length($seq)-1];
-    $refHash{$name} = [$seq,0,length($seq)-1,"",""];
+    $refHash{$name} = [$seq,0,length($seq)-1,"","",[],[]];
     #print "$start\t$end\n";
   }
   ### START loop for n iterations
@@ -118,94 +119,117 @@ for (my $i=0; $i<$iter; $i++) {
 
   }
   exit if scalar @fastq == 0;
-  print "Read in ", (scalar @fastq)/2 , " reads\n";
-  while (my $name = shift @fastq) {
-    my $seq = shift @fastq;
-    if ($i == 0 && $rawReads =~ /fastq|fq$/) {
-      my $plus = shift @fastq;
-      my $qual = shift @fastq;
-    }
-    chomp($name,$seq);
-    my $matchBool = 0;
-    for my $kmer (keys %refKhash) {
-      my $pos = index($seq, $kmer);
-      if ($pos >= 0) {
-        $matchBool = 1;
-        my $refName = ${$refKhash{$kmer}}[0];
-        if (${$refKhash{$kmer}}[1] <= 0) {
-          my $newStartSeq = substr($seq,0,$pos);
-          my $adapterPos = index($newStartSeq,$revAdapter);
-          if ($adapterPos >= 0) {
-            my $trimmed = substr($newStartSeq,$adapterPos+length($revAdapter));
-            $newStartSeq = $trimmed;
-          }
-          my $newStart = 0 - length($newStartSeq);
-          if ($newStart < ${$refHash{$refName}}[1]) {
-            ${$refHash{$refName}}[1] = $newStart;
-            ${$refHash{$refName}}[3] = $newStartSeq;
-          }
-        } elsif (${$refKhash{$kmer}}[1] > 0) {
-          my $newEndSeq = substr($seq,$pos+$kmerSize);
-          if ($adapterPos >= 0) {
-            my $trimmed = substr($newStartSeq,$adapterPos+length($revAdapter));
-            $newStartSeq = $trimmed;
-          }
-          my $newEnd = length(${$refHash{$refName}}[0]) + length($newEndSeq);
-          if ($newEnd > ${$refHash{$refName}}[2]) {
-            ${$refHash{$refName}}[2] = $newEnd;
-            ${$refHash{$refName}}[4] = $newEndSeq;
-          }
-        }
-      } else {
-        my $revSeq = revcom($seq)->seq();
-        $pos = index($revSeq, $kmer);
-        if ($pos >= 0) {
-          $matchBool = 1;
-          my $refName = ${$refKhash{$kmer}}[0];
-          if (${$refKhash{$kmer}}[1] <= 0) {
-            my $newStartSeq = substr($revSeq,0,$pos);
-            my $adapterPos = index($newStartSeq,$revAdapter);
-            if ($adapterPos >= 0) {
-              my $trimmed = substr($newStartSeq,$adapterPos+length($revAdapter));
-              $newStartSeq = $trimmed;
-            }
-            my $newStart = 0 - length($newStartSeq);
-            if ($newStart < ${$refHash{$refName}}[1]) {
-              ${$refHash{$refName}}[1] = $newStart;
-              ${$refHash{$refName}}[3] = $newStartSeq;
-            }
-          } elsif (${$refKhash{$kmer}}[1] > 0) {
-            my $newEndSeq = substr($revSeq,$pos+$kmerSize);
-            my $adapterPos = index($newEndSeq,$adapter);
-            if ($adapterPos >= 0) {
-              my $trimmed = substr($newEndSeq,0,$adapterPos);
-              $newEndSeq = $trimmed;
-            }
-            my $newEnd = length(${$refHash{$refName}}[0]) + length($newEndSeq);
-            if ($newEnd > ${$refHash{$refName}}[2]) {
-              ${$refHash{$refName}}[2] = $newEnd;
-              ${$refHash{$refName}}[4] = $newEndSeq;
-            }
-          }
-        }
+  my $batchSize = int((scalar @fastq)/$threads/2)*2;
+  my $totalReads = (scalar @fastq)/2;
+  print "Read in $totalReads reads\n";
+
+  my $forks = Parallel::ForkManager->new($threads);
+  my %results;
+  my $n = 0;
+
+  $forks -> run_on_finish(
+    sub {
+      $n++;
+      my ($pid, $exit_code, $ident, $exit_signal, $core_dump, $data_structure_reference) = @_;
+      # retrieve data structure from child
+      if (defined($data_structure_reference)) {  # children are not forced to send anything
+        $results{$n} = $data_structure_reference;  # child passed a string reference
+      }
+      else {  # problems occurring during storage or retrieval will throw a warning
+        print qq|No message received from child process $pid!\n|;
       }
     }
-    if ($matchBool == 0) {
-      push(@unaln, ($name, $seq));
+  );
+
+  FORK:
+  while (scalar @fastq > 0) {
+    #print scalar @fastq, " reads remaining...\n";
+    my $end;
+    if ($batchSize > scalar @fastq) {
+      $end = scalar @fastq;
+    } else {
+      $end = $batchSize;
+    }
+    my @slice = splice(@fastq,0,$end);
+    $forks->start and next FORK;
+    my @result = &alignAndConquer(\@slice,$rawReads,\%refKhash,\%refHash,$adapter,$revAdapter,$i);
+    $forks->finish(0, \@result);
+  }
+  $forks->wait_all_children;
+
+  print "Merging data...\n";
+  for my $key (keys %results) {
+    #print $key, "\n";
+    push(@fastq, @{${$results{$key}}[0]});
+    for my $rkey (keys %{$results{$key}[1]}) {
+      my $childRef = ${$results{$key}[1]}{$rkey};
+      #print ${$refHash{$rkey}}[2], "\t", ${$childRef}[2], "\t", ${$refHash{$rkey}}[1], "\t", ${$childRef}[1], "\n";
+      for (my $i = 0; $i < scalar @{${$childRef}[5]}; $i++) {
+        ${${$refHash{$rkey}}[5]}[$i] .= ${${$childRef}[5]}[$i];
+      }
+      for (my $i = 0; $i < scalar @{${$childRef}[6]}; $i++) {
+        ${${$refHash{$rkey}}[6]}[$i] .= ${${$childRef}[6]}[$i];
+      }
+      if (${$refHash{$rkey}}[2] < ${$childRef}[2]) {
+        ${$refHash{$rkey}}[2] = ${$childRef}[2];
+        ${$refHash{$rkey}}[4] = ${$childRef}[4];
+      }
+      if (${$refHash{$rkey}}[1] > ${$childRef}[1]) {
+        ${$refHash{$rkey}}[1] = ${$childRef}[1];
+        ${$refHash{$rkey}}[3] = ${$childRef}[3];
+      }
     }
   }
-  @fastq = @unaln;
-  @unaln = ();
+
   print "\tWriting out extended contigs\n";
   open(OUT, "> $prefix.extended.$i.fasta");
   my %extHash;
+  my @bases = ("A","C","G","T");
   my $extCount = 0;
   for my $key (sort keys %refHash) {
-    print "Extending $key " . -length(@{$refHash{$key}}[3]) . ", +" . length(@{$refHash{$key}}[4]), "\n";
-    my $seq = join("", @{$refHash{$key}}[3,0,4]);
+    my $pre = "";
+    my $post = "";
+    for my $pileup (@{${$refHash{$key}}[5]}) {
+      #print $pileup,"\n";
+      my $count = 0;
+      my $call = "";
+      for my $base (@bases) {
+        my $bcount = eval "\$pileup =~ tr/\Q$base\E//";
+        #print "$base: $bcount\n";
+        if ($bcount > $count) {
+          $call = $base;
+          $count = $bcount;
+        }
+      }
+      if ($count >= $cov) {
+        $pre = $call . $pre;
+      } else {
+        last;
+      }
+    }
+    for my $pileup (@{${$refHash{$key}}[6]}) {
+      #print $pileup,"\n";
+      my $count = 0;
+      my $call = "";
+      for my $base (@bases) {
+        my $bcount = eval "\$pileup =~ tr/\Q$base\E//";
+        #print "$base: $bcount\n";
+        if ($bcount > $count) {
+          $call = $base;
+          $count = $bcount;
+        }
+      }
+      if ($count >= $cov) {
+        $post .= $call;
+      } else {
+        last;
+      }
+    }
+    print "Extending $key " . -length($pre) . ", +" . length($post), "\n";
+    my $seq = join("", $pre, ${$refHash{$key}}[0], $post);
     print OUT ">", $key, "\n", join("", $seq, "\n");
     $extHash{$key} = $seq;
-    $extCount += length(@{$refHash{$key}}[3]) + length(@{$refHash{$key}}[4]);
+    $extCount += length($pre) + length($post);
   }
   if ($extCount == 0) {
     print ("Unable to find any reads to extend existing contigs, exiting...\n");
@@ -254,8 +278,6 @@ for (my $i=0; $i<$iter; $i++) {
           $C1pos = 0;
           my $rev = revcom($extHash{$f[9]});
           $extHash{$f[9]} = $rev->seq();
-        } else {
-          next;
         }
 
         if ($f[3] < $f[8] && $f[2] == $f[8]) {
@@ -278,8 +300,6 @@ for (my $i=0; $i<$iter; $i++) {
           $C2pos = 0;
           my $rev = revcom($extHash{$f[10]});
           $extHash{$f[10]} = $rev->seq();
-        } else {
-          next;
         }
 
         my $C1len = $C1end - $C1start;
@@ -306,7 +326,15 @@ for (my $i=0; $i<$iter; $i++) {
           $seenIndiv{$f[10]} = 1;
         }
         #print ">$f[9]\n$extHash{$f[9]}\n>$f[10]\n$extHash{$f[10]}\n>C1:$C1start-$C1end $C1seq\n>common:$f[0]-$f[1]\n$commonSeq\n>C2:$C2start-$C2end $C2seq\n";
-      }
+      } # elsif ($f[9] eq $f[10]) {
+      #   if ($f[1] < $f[7] && $f[0] == $f[7]) {
+      #     $C1start = $f[7] - $f[1];
+      #     $C1end = $f[7];
+      #     $C1pos = 1;
+      #     my $rev = revcom($extHash{$f[9]});
+      #     $extHash{$f[9]} = $rev->seq();
+      #   }
+      # }
     }
   }
   for my $key (sort keys %extHash) {
@@ -320,4 +348,114 @@ for (my $i=0; $i<$iter; $i++) {
 }
 close(LOG);
 
-### END
+#### subroutines ####
+sub alignAndConquer {
+  my $array = shift;
+  my $format = shift;
+  my $srefKhash = shift;
+  my $srefHash = shift;;
+  my $sadapter = shift;
+  my $srevAdapter = shift;
+  my $iter = shift;
+  my @unaln;
+  while (my $name = shift @$array) {
+    my $seq = shift @$array;
+    if ($iter == 0 && $format =~ /fastq|fq$/) {
+      my $plus = shift @$array;
+      my $qual = shift @$array;
+    }
+    chomp($name,$seq);
+    #print "$name\t$seq\n";
+    my $matchBool = 0;
+    for my $kmer (keys %$srefKhash) {
+      my $pos = index($seq, $kmer);
+      if ($pos >= 0) {
+        $matchBool = 1;
+        my $refName = ${$$srefKhash{$kmer}}[0];
+        if (${$$srefKhash{$kmer}}[1] <= 0) {
+          my $newStartSeq = substr($seq,0,$pos);
+          my @base = reverse(split('',$newStartSeq));
+          for (my $i = 0; $i<=$#base; $i++) {
+            ${${$$srefHash{$refName}}[5]}[$i] .= $base[$i];
+          }
+          my $adapterPos = index($newStartSeq,$revAdapter);
+          if ($adapterPos >= 0) {
+            my $trimmed = substr($newStartSeq,$adapterPos+length($revAdapter));
+            $newStartSeq = $trimmed;
+          }
+          my $newStart = 0 - length($newStartSeq);
+          if ($newStart < ${$$srefHash{$refName}}[1]) {
+            ${$$srefHash{$refName}}[1] = $newStart;
+            ${$$srefHash{$refName}}[3] = $newStartSeq;
+          }
+        } elsif (${$$srefKhash{$kmer}}[1] > 0) {
+          my $newEndSeq = substr($seq,$pos+$kmerSize);
+          my @base = split('',$newEndSeq);
+          for (my $i = 0; $i<=$#base; $i++) {
+            ${${$$srefHash{$refName}}[6]}[$i] .= $base[$i];
+          }
+          my $adapterPos = index($newEndSeq,$adapter);
+          if ($adapterPos >= 0) {
+            my $trimmed = substr($newEndSeq,0,$adapterPos);
+            $newEndSeq = $trimmed;
+          }
+          my $newEnd = length(${$$srefHash{$refName}}[0]) + length($newEndSeq);
+          if ($newEnd > ${$$srefHash{$refName}}[2]) {
+            ${$$srefHash{$refName}}[2] = $newEnd;
+            ${$$srefHash{$refName}}[4] = $newEndSeq;
+          }
+        }
+      } else {
+        my $revSeq = revcom($seq)->seq();
+        $pos = index($revSeq, $kmer);
+        if ($pos >= 0) {
+          $matchBool = 1;
+          my $refName = ${$$srefKhash{$kmer}}[0];
+          if (${$$srefKhash{$kmer}}[1] <= 0) {
+            my $newStartSeq = substr($revSeq,0,$pos);
+            my @base = reverse(split('',$newStartSeq));
+            for (my $i = 0; $i<=$#base; $i++) {
+              ${${$$srefHash{$refName}}[5]}[$i] .= $base[$i];
+            }
+            my $adapterPos = index($newStartSeq,$revAdapter);
+            if ($adapterPos >= 0) {
+              my $trimmed = substr($newStartSeq,$adapterPos+length($revAdapter));
+              $newStartSeq = $trimmed;
+            }
+            my $newStart = 0 - length($newStartSeq);
+            if ($newStart < ${$$srefHash{$refName}}[1]) {
+              ${$$srefHash{$refName}}[1] = $newStart;
+              ${$$srefHash{$refName}}[3] = $newStartSeq;
+            }
+          } elsif (${$$srefKhash{$kmer}}[1] > 0) {
+            my $newEndSeq = substr($revSeq,$pos+$kmerSize);
+            my @base = split('',$newEndSeq);
+            for (my $i = 0; $i<=$#base; $i++) {
+              ${${$$srefHash{$refName}}[6]}[$i] .= $base[$i];
+            }
+            my $adapterPos = index($newEndSeq,$adapter);
+            if ($adapterPos >= 0) {
+              my $trimmed = substr($newEndSeq,0,$adapterPos);
+              $newEndSeq = $trimmed;
+            }
+            my $newEnd = length(${$$srefHash{$refName}}[0]) + length($newEndSeq);
+            if ($newEnd > ${$$srefHash{$refName}}[2]) {
+              ${$$srefHash{$refName}}[2] = $newEnd;
+              ${$$srefHash{$refName}}[4] = $newEndSeq;
+            }
+          }
+        }
+      }
+    }
+    push(@unaln, ($name, $seq));
+  }
+  #print "Finished fork, returning alignments for merging...\n";
+  #print scalar @unaln, "\n", Dumper($srefHash);
+  return (\@unaln,$srefHash);
+}
+
+# test is circular
+# if is circular trim and add circ to contig name
+# for consequent rounds skip contigs that contain circ
+
+# min coverage

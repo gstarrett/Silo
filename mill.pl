@@ -38,6 +38,7 @@ my $pident = 100;
 my $seedLen = 36;
 my $lenNucmer = 50;
 my $cov = 3;
+my $minOverlap = 100;
 my $k = 2;
 my $adapter = "AGATCGGAAGAGC";
 my $revAdapter = revcom($adapter)->seq();
@@ -55,6 +56,7 @@ GetOptions (  "contigs:s" => \$contigs,
               "xSpots:i" => \$x,
               "depth:i" => \$cov,
               "mSpots:i" => \$m,
+              "minOverlap:i" => \$minOverlap,
               "readMax:i" => \$readMax,
               "out:s" => \$prefix,
               "noMerge" => \$noMerge,
@@ -81,16 +83,25 @@ for (my $i=0; $i<$iter; $i++) {
   print "=== Starting iteration $i ===\n";
   my %refKhash;
   my %refHash;
+  my $newCirc = 0;
   my $refFasta = Bio::SeqIO->new(-file => $ref, -format => "fasta");
   while (my $seqObj = $refFasta->next_seq) {
     my $seq = $seqObj->seq();
     my $name = $seqObj->display_id();
     my $start = substr($seq,0,$endSize);
     my $end = substr($seq,-$endSize);
-    next if $start eq $end;
-    $refKhash{$start} = [$name, 0];
-    $refKhash{$end} = [$name, length($seq)-1];
-    $refHash{$name} = [$seq,0,length($seq)-1,"","",[],[]];
+    my $pos = index(substr($seq,-$minOverlap),$start);
+    if ($pos > 0 && $name !~ /-circ/) {
+        $name .= "-circ";
+        $newCirc = 1;
+        $seq = substr($seq,0,length($seq) - ($minOverlap-($pos+$endSize)));
+        $refHash{$name} = [$seq,0,length($seq)-1,"","",[],[]];
+    } else {
+      $refHash{$name} = [$seq,0,length($seq)-1,"","",[],[]];
+      next if $start eq $end;
+      $refKhash{$start} = [$name, 0];
+      $refKhash{$end} = [$name, length($seq)-1];
+    }
     #print "$start\t$end\n";
   }
   ### START loop for n iterations
@@ -157,7 +168,7 @@ for (my $i=0; $i<$iter; $i++) {
   }
   $forks->wait_all_children;
 
-  print "Merging data...\n";
+  print "Merging forks...\n";
   for my $key (keys %results) {
     #print $key, "\n";
     push(@fastq, @{${$results{$key}}[0]});
@@ -231,9 +242,11 @@ for (my $i=0; $i<$iter; $i++) {
     $extHash{$key} = $seq;
     $extCount += length($pre) + length($post);
   }
-  if ($extCount == 0) {
+  if ($extCount == 0 && $newCirc = 0) {
     print ("Unable to find any reads to extend existing contigs, exiting...\n");
     exit;
+  } elsif ($extCount == 0 && $newCirc = 1) {
+    goto CIRCD
   }
   close(OUT);
   open(MERGE, "> $prefix.merge.$i.fasta");
@@ -248,7 +261,7 @@ for (my $i=0; $i<$iter; $i++) {
     for (my $i = 4; $i < scalar @coords; $i++) {
       chomp($coords[$i]);
       my @f = split("\t", $coords[$i]);
-      if ($f[9] ne $f[10]) {
+      if ($f[9] ne $f[10] && ($f[9] !~ /-circ/ && $f[10] !~ /-circ/)) {
         my ($seq, $C1start, $C1end, $C2start, $C2end, $C1pos, $C2pos);
 
         my $comparison = join(".", sort @f[9,10]);
@@ -337,6 +350,7 @@ for (my $i=0; $i<$iter; $i++) {
       # }
     }
   }
+  CIRCD
   for my $key (sort keys %extHash) {
     unless (exists $seenIndiv{$key}) {
       print MERGE ">", $key, "\n", $extHash{$key}, "\n";
@@ -457,5 +471,3 @@ sub alignAndConquer {
 # test is circular
 # if is circular trim and add circ to contig name
 # for consequent rounds skip contigs that contain circ
-
-# min coverage

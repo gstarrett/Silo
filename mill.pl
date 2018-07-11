@@ -242,6 +242,7 @@ for (my $i=0; $i<$iter; $i++) {
     $extHash{$key} = $seq;
     $extCount += length($pre) + length($post);
   }
+  if ($extCount == 0 && $newCirc == 0) {
     print ("Unable to find any reads to extend existing contigs, exiting...\n");
     exit;
   } elsif ($extCount == 0 && $newCirc == 1) {

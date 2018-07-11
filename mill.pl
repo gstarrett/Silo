@@ -242,11 +242,10 @@ for (my $i=0; $i<$iter; $i++) {
     $extHash{$key} = $seq;
     $extCount += length($pre) + length($post);
   }
-  if ($extCount == 0 && $newCirc = 0) {
     print ("Unable to find any reads to extend existing contigs, exiting...\n");
     exit;
-  } elsif ($extCount == 0 && $newCirc = 1) {
-    goto CIRCD
+  } elsif ($extCount == 0 && $newCirc == 1) {
+    goto CIRCD;
   }
   close(OUT);
   open(MERGE, "> $prefix.merge.$i.fasta");
@@ -350,7 +349,7 @@ for (my $i=0; $i<$iter; $i++) {
       # }
     }
   }
-  CIRCD
+  CIRCD:
   for my $key (sort keys %extHash) {
     unless (exists $seenIndiv{$key}) {
       print MERGE ">", $key, "\n", $extHash{$key}, "\n";
